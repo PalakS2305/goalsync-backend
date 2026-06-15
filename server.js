@@ -10,24 +10,11 @@ const quarterlyRoutes = require("./routes/quarterlyRoutes");
 
 const app = express();
 
-// ── CORS — allow frontend domains ──
-const allowedOrigins = [
-  "http://localhost:5500",
-  "http://127.0.0.1:5500",
-  "http://localhost:3000",
-  process.env.FRONTEND_URL, // Vercel URL added later
-].filter(Boolean);
-
+// ── CORS — allow all origins (hackathon mode) ──
 app.use(
   cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
-    credentials: true,
+    origin: "*",
+    credentials: false,
   }),
 );
 
