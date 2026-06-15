@@ -1,12 +1,12 @@
 const pool = require("../db/index");
 const { sendGoalsSubmittedEmail } = require("../utils/emailService");
+
 // ── Create a new goal ──
 const createGoal = async (req, res) => {
   const employee_id = req.user.id;
   const { thrust_area, title, description, uom_type, target_value, weightage } =
     req.body;
 
-  // Validation
   if (!thrust_area || !title || !uom_type || !weightage) {
     return res.status(400).json({
       error: "Thrust area, title, UoM type and weightage are required.",
@@ -20,7 +20,6 @@ const createGoal = async (req, res) => {
   }
 
   try {
-    // Check how many goals employee already has
     const countResult = await pool.query(
       `SELECT COUNT(*) FROM goals 
        WHERE employee_id = $1 AND status != 'returned'`,
@@ -34,7 +33,6 @@ const createGoal = async (req, res) => {
       });
     }
 
-    // Check total weightage won't exceed 100
     const weightResult = await pool.query(
       `SELECT COALESCE(SUM(weightage), 0) as total 
        FROM goals 
@@ -45,20 +43,16 @@ const createGoal = async (req, res) => {
     const currentTotal = parseFloat(weightResult.rows[0].total);
     if (currentTotal + parseFloat(weightage) > 100) {
       return res.status(400).json({
-        error: `Adding this goal would exceed 100%. 
-                Current total: ${currentTotal}%. 
-                Remaining: ${100 - currentTotal}%`,
+        error: `Adding this goal would exceed 100%. Current total: ${currentTotal}%. Remaining: ${100 - currentTotal}%`,
       });
     }
 
-    // Get employee's manager
     const managerResult = await pool.query(
       "SELECT manager_id FROM users WHERE id = $1",
       [employee_id],
     );
     const manager_id = managerResult.rows[0]?.manager_id || null;
 
-    // Insert goal
     const result = await pool.query(
       `INSERT INTO goals 
         (employee_id, manager_id, thrust_area, title, description, 
@@ -77,7 +71,6 @@ const createGoal = async (req, res) => {
       ],
     );
 
-    // Log to audit
     await pool.query(
       `INSERT INTO audit_logs 
         (user_id, user_name, user_role, action, table_name, record_id, description)
@@ -118,7 +111,6 @@ const getMyGoals = async (req, res) => {
       [employee_id],
     );
 
-    // Calculate total weightage
     const totalWeightage = result.rows.reduce(
       (sum, goal) => sum + parseFloat(goal.weightage),
       0,
@@ -141,7 +133,6 @@ const deleteGoal = async (req, res) => {
   const goal_id = req.params.id;
 
   try {
-    // Check goal exists and belongs to this employee
     const check = await pool.query(
       "SELECT * FROM goals WHERE id = $1 AND employee_id = $2",
       [goal_id, employee_id],
@@ -153,7 +144,6 @@ const deleteGoal = async (req, res) => {
 
     const goal = check.rows[0];
 
-    // Can only delete draft or returned goals
     if (!["draft", "returned"].includes(goal.status)) {
       return res.status(400).json({
         error: "Cannot delete a submitted or approved goal.",
@@ -162,7 +152,6 @@ const deleteGoal = async (req, res) => {
 
     await pool.query("DELETE FROM goals WHERE id = $1", [goal_id]);
 
-    // Log to audit
     await pool.query(
       `INSERT INTO audit_logs 
         (user_id, user_name, user_role, action, table_name, record_id, description)
@@ -190,11 +179,10 @@ const submitGoals = async (req, res) => {
   const employee_id = req.user.id;
 
   try {
-    // Get all draft goals
     const goalsResult = await pool.query(
       `SELECT * FROM goals 
        WHERE employee_id = $1 AND status = 'draft'`,
-      [employee_id]
+      [employee_id],
     );
 
     if (goalsResult.rows.length === 0) {
@@ -203,57 +191,6 @@ const submitGoals = async (req, res) => {
       });
     }
 
-    // Update all draft goals to submitted
-    await pool.query(
-      `UPDATE goals
-       SET status = 'submitted',
-           updated_at = CURRENT_TIMESTAMP
-       WHERE employee_id = $1
-       AND status = 'draft'`,
-      [employee_id]
-    );
-
-    // Send email to manager
-    try {
-      const managerResult = await pool.query(
-        `SELECT u.email, u.name
-         FROM users u
-         JOIN users e ON e.manager_id = u.id
-         WHERE e.id = $1`,
-        [employee_id]
-      );
-
-      if (managerResult.rows.length > 0) {
-        const mgr = managerResult.rows[0];
-
-        await sendGoalsSubmittedEmail(
-          mgr.email,
-          mgr.name,
-          req.user.name,
-          goalsResult.rows.length
-        );
-      }
-    } catch (emailErr) {
-      console.error(
-        "Email notification failed:",
-        emailErr.message
-      );
-    }
-
-    res.status(200).json({
-      message: "Goals submitted successfully.",
-    });
-
-  } catch (err) {
-    console.error("Submit goals error:", err.message);
-
-    res.status(500).json({
-      error: "Server error.",
-    });
-  }
-};
-
-    // Check total weightage = 100
     const totalWeightage = goalsResult.rows.reduce(
       (sum, g) => sum + parseFloat(g.weightage),
       0,
@@ -261,12 +198,10 @@ const submitGoals = async (req, res) => {
 
     if (totalWeightage !== 100) {
       return res.status(400).json({
-        error: `Total weightage must be exactly 100%. 
-                Current total: ${totalWeightage}%`,
+        error: `Total weightage must be exactly 100%. Current total: ${totalWeightage}%`,
       });
     }
 
-    // Update all draft goals to submitted
     await pool.query(
       `UPDATE goals 
        SET status = 'submitted', submitted_at = NOW()
@@ -274,7 +209,6 @@ const submitGoals = async (req, res) => {
       [employee_id],
     );
 
-    // Log to audit
     await pool.query(
       `INSERT INTO audit_logs 
         (user_id, user_name, user_role, action, table_name, description)
@@ -288,6 +222,29 @@ const submitGoals = async (req, res) => {
         `Employee submitted ${goalsResult.rows.length} goals for approval`,
       ],
     );
+
+    // Send email to manager
+    try {
+      const managerResult = await pool.query(
+        `SELECT u.email, u.name 
+         FROM users u
+         JOIN users e ON e.manager_id = u.id
+         WHERE e.id = $1`,
+        [employee_id],
+      );
+
+      if (managerResult.rows.length > 0) {
+        const mgr = managerResult.rows[0];
+        await sendGoalsSubmittedEmail(
+          mgr.email,
+          mgr.name,
+          req.user.name,
+          goalsResult.rows.length,
+        );
+      }
+    } catch (emailErr) {
+      console.error("Email notification failed:", emailErr.message);
+    }
 
     res.status(200).json({
       message: `${goalsResult.rows.length} goals submitted for manager approval.`,
